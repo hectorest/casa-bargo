@@ -150,9 +150,13 @@ export function crearEscena(contenedor) {
 
   // Humo
   const humo = [];
-  const matHumo = lambert('#f0f0f0', { transparent: true, opacity: 0.7 });
+  const matHumo = lambert('#f4f1ea', { transparent: true, opacity: 0.55, depthWrite: false });
   const geoHumo = new THREE.IcosahedronGeometry(0.3, 0);
-  for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(geoHumo, matHumo); s.userData.t = i / 8; scene.add(s); humo.push(s); }
+  for (let i = 0; i < 10; i++) {
+    const s = new THREE.Mesh(geoHumo, matHumo);
+    s.userData = { t: i / 10, origen: null, giro: Math.random() * 6 };
+    s.visible = false; scene.add(s); humo.push(s);
+  }
 
   // Cajas flotantes
   const geoCajaF = new THREE.BoxGeometry(1, 1, 1);
@@ -205,11 +209,16 @@ export function crearEscena(contenedor) {
 
     // Humo
     posChimenea.set(0.7, 3.6, 1.6).applyMatrix4(barco.matrixWorld);
+    // Cada bocanada nace en la chimenea y se queda en el aire: el barco la deja atrás
     for (const s of humo) {
-      s.userData.t = (s.userData.t + dt * 0.35) % 1;
-      const k = s.userData.t;
-      s.position.set(posChimenea.x + k * 1.5, posChimenea.y + k * 3.5, posChimenea.z + k * 3);
-      s.scale.setScalar(0.6 + k * 2.2);
+      const u = s.userData;
+      u.t += dt * 0.3;
+      if (u.t >= 1 || !u.origen) { u.t %= 1; u.origen = (u.origen ?? new THREE.Vector3()).copy(posChimenea); }
+      const k = u.t;
+      s.visible = true;
+      s.position.set(u.origen.x + k * 1.2 + Math.sin(u.giro + k * 4) * 0.3, u.origen.y + k * 2.6, u.origen.z + k * 0.8);
+      s.rotation.set(u.giro + k, u.giro * 2 + k * 1.5, 0);
+      s.scale.setScalar((0.5 + k * 2.2) * (1 - k * k * k)); // crece y se deshace al final
     }
 
     // Tramos de terreno: el tramo j vive siempre en la ranura j % n

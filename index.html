@@ -11,7 +11,7 @@
 <style>
   :root { --tinta: #173543; --crema: #fbf3e4; --ambar: #e8a33d; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #9fc7d8; font-family: "Trebuchet MS", system-ui, sans-serif; }
-  canvas { display: block; width: 100vw; height: 100vh; }
+  body > canvas { display: block; width: 100vw; height: 100vh; }
 
   #panel {
     position: fixed; top: 3vh; right: 2.5vw; width: 17vw; min-width: 200px; padding: 1.4vw;
@@ -19,7 +19,7 @@
     transition: width .5s, padding .5s;
   }
   #panel h1 { margin: 0 0 .6vw; font-size: 1.5vw; }
-  #qr { width: 100%; image-rendering: pixelated; border-radius: .6vw; display: block; }
+  #qr { width: 100%; height: auto; max-height: 45vh; object-fit: contain; image-rendering: pixelated; border-radius: .6vw; display: block; }
   #codigo { font-size: 2.6vw; font-weight: 700; letter-spacing: .3em; text-align: center; margin: .5vw 0 0; }
   #urlMando { font-size: .75vw; opacity: .6; text-align: center; word-break: break-all; margin-bottom: .6vw; }
   #panel.compacto { width: 11vw; padding: 1vw; }
