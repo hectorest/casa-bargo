@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- Tele sin gráficos para las pruebas automáticas: misma red y misma simulación que la de verdad. -->
+<meta charset="utf-8"><title>Tele falsa</title>
+<script type="module">
+import { crearSala } from '../js/comun/red.js';
+import { crearEstado, unirJugador, desconectarJugador, aplicarEntrada, paso, conectados } from '../js/juego/estado.js';
+const estado = crearEstado(), conexiones = new Map(), log = [];
+window.estado = estado; window.log = log;
+const avisar = j => conexiones.get(j.id)?.enviar({ t: 'puesto', puesto: j.puesto });
+crearSala('PRUE', { alConectar: con => {
+  let id = null;
+  con.alDatos(m => {
+    if (m.t === 'hola') { id = m.id; conexiones.set(id, con); const j = unirJugador(estado, id).jugador; con.enviar({ t: 'bienvenida', n: j.n, color: j.color, puesto: j.puesto }); log.push('hola ' + j.n); return; }
+    for (const ev of aplicarEntrada(estado, id, m)) { log.push(ev.tipo); if (ev.tipo === 'puesto') avisar(ev.jugador); }
+  });
+  con.alCerrar(() => { conexiones.delete(id); log.push('cierre'); desconectarJugador(estado, id).forEach(avisar); });
+}});
+setInterval(() => paso(estado, 0.05), 50);
+window.resumen = () => conectados(estado).map(j => ({ n: j.n, puesto: j.puesto, giro: j.giro, palanca: j.palanca }));
+</script>

@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casa-barco · Prueba de rendimiento</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9fc7d8; font-family: system-ui, sans-serif; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; top: 16px; left: 16px; padding: 12px 16px; border-radius: 10px;
+    background: rgba(10, 25, 35, .72); color: #e8f4f8; font: 15px/1.45 ui-monospace, monospace;
+    white-space: pre; pointer-events: none; min-width: 280px;
+  }
+  #hud b { color: #ffd479; font-weight: 600; }
+  #panel {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; padding: 10px; border-radius: 12px; background: rgba(10, 25, 35, .72);
+  }
+  #panel button {
+    font: 600 20px system-ui, sans-serif; padding: 14px 22px; border-radius: 9px; border: 2px solid transparent;
+    background: #2c5a6e; color: #fff; cursor: pointer;
+  }
+  #panel button.on { background: #e8a33d; color: #1a1a1a; }
+  #panel button:focus { outline: none; border-color: #fff; }
+  #results {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(10, 25, 35, .85); color: #e8f4f8;
+  }
+  #results .box { background: #173543; padding: 28px 36px; border-radius: 14px; font-size: 20px; max-width: 90vw; }
+  #results h2 { margin: 0 0 12px; color: #ffd479; }
+  #results table { border-collapse: collapse; margin: 12px 0; }
+  #results td, #results th { padding: 6px 16px; text-align: left; border-bottom: 1px solid #2c5a6e; }
+  #results .ok { color: #8fe08f; } #results .meh { color: #ffd479; } #results .bad { color: #ff8a7a; }
+  #results small { display: block; opacity: .75; font-size: 15px; white-space: pre-wrap; }
+  #fatal { position: fixed; inset: 0; display: none; padding: 40px; background: #3a1414; color: #fff; font: 20px/1.5 system-ui; white-space: pre-wrap; }
+</style>
+<script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js" } }
+</script>
+</head>
+<body>
+<div id="hud">Cargando…</div>
+<div id="panel">
+  <button data-q="bajo">Bajo</button>
+  <button data-q="medio">Medio</button>
+  <button data-q="alto">Alto</button>
+  <button id="bench">▶ Benchmark</button>
+</div>
+<div id="results"><div class="box" id="resultsBox"></div></div>
+<div id="fatal"></div>
+
+<script>
+  // Captura de errores antes de que cargue nada, para verlos en la tele.
+  window.__errors = [];
+  function showFatal(msg) {
+    const el = document.getElementById('fatal');
+    el.style.display = 'block';
+    el.textContent = '⚠ Error\n\n' + msg + '\n\nNavegador: ' + navigator.userAgent;
+  }
+  window.addEventListener('error', e => { window.__errors.push(String(e.message)); if (!window.__started) showFatal(e.message); });
+  window.addEventListener('unhandledrejection', e => { window.__errors.push(String(e.reason)); });
+  setTimeout(() => { if (!window.__started) showFatal('Three.js no ha cargado en 15 s.\n¿Tiene la tele acceso a internet (cdn.jsdelivr.net)?'); }, 15000);
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+window.__started = true;
+
+// ---------------------------------------------------------------------------
+// Ajustes de calidad
+// ---------------------------------------------------------------------------
+const PRESETS = {
+  bajo:  { renderH: 540,  density: 0.5, shadows: false, chunks: 4, fogFar: 150 },
+  medio: { renderH: 720,  density: 1.0, shadows: false, chunks: 5, fogFar: 190 },
+  alto:  { renderH: 1080, density: 1.5, shadows: true,  chunks: 6, fogFar: 230 },
+};
+const MAX_CHUNKS = 6;
+const CHUNK_LEN = 48;         // largo de cada tramo de terreno
+const WIDTH = 150;            // ancho del terreno
+const SEG_X = 30, SEG_Z = 10; // resolución del terreno (low-poly)
+const RIVER_HALF = 7;         // medio ancho del río
+const MAX_TREES = 70, MAX_ROCKS = 14; // por tramo, con densidad 1.5
+const SPEED = 9;              // velocidad del barco (unidades/s)
+
+const params = new URLSearchParams(location.search);
+let preset = PRESETS[params.get('q')] ? params.get('q') : 'medio';
+
+// ---------------------------------------------------------------------------
+// Utilidades: ruido determinista y curva del río
+// ---------------------------------------------------------------------------
+function hash(x, z) {
+  const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+function noise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+  const a = hash(xi, zi), b = hash(xi + 1, zi), c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+const riverX = z => Math.sin(z * 0.018) * 14 + Math.sin(z * 0.0071 + 1.3) * 22;
+function terrainY(x, z) {
+  const d = Math.abs(x - riverX(z));
+  if (d < RIVER_HALF) return -1.6;
+  const t = Math.min(1, (d - RIVER_HALF) / 10);
+  const bank = t * t * (3 - 2 * t) * 2.4;
+  const hills = noise(x * 0.04, z * 0.04) * 9 * Math.min(1, (d - RIVER_HALF) / 30);
+  return -1.6 + bank + 1.0 + hills * (d > RIVER_HALF + 4 ? 1 : 0.3);
+}
+function rng(seed) { let s = seed >>> 0 || 1; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+
+// ---------------------------------------------------------------------------
+// Renderer, escena, luces
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight, false);
+document.body.prepend(renderer.domElement);
+const gl = renderer.getContext();
+const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+
+const SKY = new THREE.Color('#9fc7d8');
+const scene = new THREE.Scene();
+scene.background = SKY;
+scene.fog = new THREE.Fog(SKY, 40, 190);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 400);
+
+scene.add(new THREE.HemisphereLight('#fff6e0', '#4a6b3a', 1.6));
+const sun = new THREE.DirectionalLight('#fff1d0', 2.2);
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 120 });
+sun.shadow.camera.updateProjectionMatrix();
+scene.add(sun, sun.target);
+
+// ---------------------------------------------------------------------------
+// Materiales y geometrías compartidas
+// ---------------------------------------------------------------------------
+const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+const crownMat = new THREE.MeshLambertMaterial({ color: '#4f8a4a', flatShading: true });
+const trunkMat = new THREE.MeshLambertMaterial({ color: '#7a5636', flatShading: true });
+const rockMat = new THREE.MeshLambertMaterial({ color: '#8d8f86', flatShading: true });
+const crownGeo = new THREE.ConeGeometry(1.6, 4, 6); crownGeo.translate(0, 3.6, 0);
+const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 1.8, 5); trunkGeo.translate(0, 0.9, 0);
+const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+
+const C_SAND = new THREE.Color('#d9c48f'), C_GRASS = new THREE.Color('#79a85a'),
+      C_DARK = new THREE.Color('#5a8a48'), C_BED = new THREE.Color('#6b7f6a');
+
+// ---------------------------------------------------------------------------
+// Tramos de terreno reutilizables (sin crear basura al avanzar)
+// ---------------------------------------------------------------------------
+const chunks = [];
+const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpP = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+
+function makeChunk() {
+  const geo = new THREE.PlaneGeometry(WIDTH, CHUNK_LEN, SEG_X, SEG_Z).toNonIndexed();
+  geo.rotateX(-Math.PI / 2);
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
+  const base = Float32Array.from(geo.attributes.position.array); // coordenadas locales originales
+  const ground = new THREE.Mesh(geo, terrainMat);
+  ground.receiveShadow = true;
+  const crowns = new THREE.InstancedMesh(crownGeo, crownMat, MAX_TREES);
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, MAX_TREES);
+  const rocks = new THREE.InstancedMesh(rockGeo, rockMat, MAX_ROCKS);
+  for (const m of [crowns, trunks, rocks]) { m.castShadow = true; m.frustumCulled = false; }
+  const group = new THREE.Group();
+  group.add(ground, crowns, trunks, rocks);
+  scene.add(group);
+  return { group, ground, crowns, trunks, rocks, base, index: null };
+}
+
+function buildChunk(ch, index) {
+  ch.index = index;
+  const zCenter = -index * CHUNK_LEN - CHUNK_LEN / 2;
+  ch.group.position.set(0, 0, zCenter);
+  const pos = ch.ground.geometry.attributes.position, col = ch.ground.geometry.attributes.color;
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = ch.base[i * 3], z = ch.base[i * 3 + 2] + zCenter;
+    const y = terrainY(x, z);
+    pos.setY(i, y);
+    const d = Math.abs(x - riverX(z));
+    if (y < -1.2) c.copy(C_BED);
+    else if (d < RIVER_HALF + 3) c.copy(C_SAND);
+    else c.copy(C_GRASS).lerp(C_DARK, noise(x * 0.1, z * 0.1));
+    col.setXYZ(i, c.r, c.g, c.b);
+  }
+  pos.needsUpdate = true; col.needsUpdate = true;
+  ch.ground.geometry.computeVertexNormals();
+
+  const r = rng(index * 9973 + 17);
+  const density = PRESETS[preset].density;
+  const nTrees = Math.round(MAX_TREES * density / 1.5);
+  let t = 0;
+  for (let tries = 0; t < nTrees && tries < nTrees * 4; tries++) {
+    const z = zCenter + (r() - 0.5) * CHUNK_LEN;
+    const side = r() < 0.5 ? -1 : 1;
+    const x = riverX(z) + side * (RIVER_HALF + 5 + r() * 60);
+    if (Math.abs(x) > WIDTH / 2) continue;
+    const s = 0.7 + r() * 0.8;
+    tmpP.set(x, terrainY(x, z) - 0.2, z - zCenter);
+    tmpQ.setFromAxisAngle(up, r() * Math.PI);
+    tmpS.set(s, s * (0.8 + r() * 0.5), s);
+    tmpM.compose(tmpP, tmpQ, tmpS);
+    ch.crowns.setMatrixAt(t, tmpM); ch.trunks.setMatrixAt(t, tmpM);
+    t++;
+  }
+  ch.crowns.count = ch.trunks.count = t;
+  const nRocks = Math.round(MAX_ROCKS * density / 1.5);
+  for (let k = 0; k < nRocks; k++) {
+    const z = zCenter + (r() - 0.5) * CHUNK_LEN;
+    const side = r() < 0.5 ? -1 : 1;
+    const x = riverX(z) + side * (RIVER_HALF - 1 + r() * 6);
+    const s = 0.4 + r() * 0.9;
+    tmpP.set(x, terrainY(x, z) + 0.1, z - zCenter);
+    tmpQ.setFromAxisAngle(up, r() * Math.PI);
+    tmpS.set(s, s * 0.7, s);
+    tmpM.compose(tmpP, tmpQ, tmpS);
+    ch.rocks.setMatrixAt(k, tmpM);
+  }
+  ch.rocks.count = nRocks;
+  for (const m of [ch.crowns, ch.trunks, ch.rocks]) m.instanceMatrix.needsUpdate = true;
+}
+
+for (let i = 0; i < MAX_CHUNKS; i++) chunks.push(makeChunk());
+
+// ---------------------------------------------------------------------------
+// Agua con olas suaves (calculadas en el shader, gratis para la CPU)
+// ---------------------------------------------------------------------------
+const waterGeo = new THREE.PlaneGeometry(200, 320, 40, 80);
+waterGeo.rotateX(-Math.PI / 2);
+const waterMat = new THREE.MeshLambertMaterial({ color: '#3f8fb0', flatShading: true, transparent: true, opacity: 0.88 });
+const waterTime = { value: 0 };
+waterMat.onBeforeCompile = sh => {
+  sh.uniforms.uTime = waterTime;
+  sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `
+    vec3 transformed = vec3(position);
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    transformed.y += sin(wp.x * 0.45 + uTime * 1.3) * 0.12 + cos(wp.z * 0.38 + uTime * 1.1) * 0.12;`);
+};
+const water = new THREE.Mesh(waterGeo, waterMat);
+water.position.y = -0.35;
+water.receiveShadow = true;
+scene.add(water);
+
+// ---------------------------------------------------------------------------
+// La casa-barco (provisional, a base de cajas)
+// ---------------------------------------------------------------------------
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color, flatShading: true }));
+  m.position.set(x, y, z); m.castShadow = true;
+  return m;
+}
+const boat = new THREE.Group();
+boat.add(
+  box(3.2, 0.8, 7, '#8a5a3b', 0, 0.2, 0),        // casco
+  box(3.4, 0.15, 7.2, '#c9a46c', 0, 0.65, 0),    // cubierta
+  box(2.4, 1.6, 3.4, '#e9dcc3', 0, 1.5, 0.6),    // cabina
+  box(2.8, 0.2, 4, '#b5523b', 0, 2.4, 0.6),      // tejado
+  box(0.35, 1.2, 0.35, '#3d3d3d', 0.7, 3.0, 1.6),// chimenea
+  box(1.4, 0.4, 1, '#6f9a4f', -0.6, 0.95, -2.4), // huerto
+);
+scene.add(boat);
+
+// Humo de la chimenea: pocas partículas reutilizadas
+const smoke = [];
+const smokeMat = new THREE.MeshLambertMaterial({ color: '#f0f0f0', transparent: true, opacity: 0.7, flatShading: true });
+const smokeGeo = new THREE.IcosahedronGeometry(0.3, 0);
+for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(smokeGeo, smokeMat); s.userData.t = i / 8; scene.add(s); smoke.push(s); }
+
+// ---------------------------------------------------------------------------
+// Aplicar calidad
+// ---------------------------------------------------------------------------
+function applyPreset(name) {
+  preset = name;
+  const p = PRESETS[name];
+  renderer.setPixelRatio(p.renderH / innerHeight);
+  renderer.setSize(innerWidth, innerHeight, false);
+  renderer.shadowMap.enabled = p.shadows;
+  sun.castShadow = p.shadows;
+  scene.fog.far = p.fogFar;
+  camera.far = p.fogFar + 10; camera.updateProjectionMatrix();
+  scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+  for (const ch of chunks) ch.index = null; // forzar reconstrucción con la nueva densidad
+  document.querySelectorAll('#panel [data-q]').forEach(b => b.classList.toggle('on', b.dataset.q === name));
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  applyPreset(preset);
+});
+
+// ---------------------------------------------------------------------------
+// Medición de rendimiento
+// ---------------------------------------------------------------------------
+const frameTimes = [];          // últimos ~2 s para el HUD
+let benchSamples = null;        // frames del benchmark en curso
+let hitches = 0;                // frames > 50 ms
+function stats(arr) {
+  if (!arr.length) return { avg: 0, low: 0 };
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const p99 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))];
+  return { avg: 1000 / mean, low: 1000 / p99 };
+}
+
+const hud = document.getElementById('hud');
+let hudTimer = 0;
+function updateHud() {
+  const s = stats(frameTimes);
+  const info = renderer.info.render;
+  const buf = renderer.getDrawingBufferSize(bufSize);
+  hud.innerHTML =
+    `<b>${s.avg.toFixed(0)} FPS</b>  (1% bajo: ${s.low.toFixed(0)})\n` +
+    `Calidad: ${preset}${benchSamples ? '  · benchmark…' : ''}\n` +
+    `Render: ${buf.x}×${buf.y}  · pantalla ${innerWidth}×${innerHeight} @${devicePixelRatio}x\n` +
+    `Draw calls: ${info.calls}  · triángulos: ${(info.triangles / 1000).toFixed(1)}k\n` +
+    `Tirones (>50 ms): ${hitches}\n` +
+    `WebGL2: ${isWebGL2 ? 'sí' : 'NO'}  · GPU: ${String(gpu).slice(0, 38)}\n` +
+    (window.__errors.length ? `Errores: ${window.__errors.length} (último: ${window.__errors.at(-1).slice(0, 40)})` : 'Errores: 0');
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark automático: cada calidad 4 s de calentamiento + 12 s de medida
+// ---------------------------------------------------------------------------
+const WARMUP = 4, MEASURE = 12;
+let bench = null;
+function startBenchmark() {
+  document.getElementById('results').style.display = 'none';
+  bench = { order: ['bajo', 'medio', 'alto'], step: 0, t: 0, results: {} };
+  applyPreset(bench.order[0]);
+}
+function benchTick(dt) {
+  bench.t += dt;
+  if (bench.t > WARMUP && !benchSamples) benchSamples = [];
+  if (bench.t > WARMUP + MEASURE) {
+    bench.results[bench.order[bench.step]] = { ...stats(benchSamples), hitches: benchSamples.filter(f => f > 50).length };
+    benchSamples = null; bench.t = 0; bench.step++;
+    if (bench.step >= bench.order.length) { showResults(bench.results); bench = null; return; }
+    applyPreset(bench.order[bench.step]);
+  }
+}
+function showResults(res) {
+  const cls = f => f >= 28 ? 'ok' : f >= 22 ? 'meh' : 'bad';
+  const rows = Object.entries(res).map(([q, r]) =>
+    `<tr><td>${q}</td><td class="${cls(r.avg)}">${r.avg.toFixed(1)}</td><td class="${cls(r.low)}">${r.low.toFixed(1)}</td><td>${r.hitches}</td></tr>`).join('');
+  const best = ['alto', 'medio', 'bajo'].find(q => res[q].avg >= 28 && res[q].low >= 20);
+  document.getElementById('resultsBox').innerHTML =
+    `<h2>Resultado</h2>` +
+    `<table><tr><th>Calidad</th><th>FPS medio</th><th>1% bajo</th><th>Tirones</th></tr>${rows}</table>` +
+    `<p>${best ? `👍 Recomendada: <b>${best}</b>` : '⚠ Ninguna calidad llega a 30 FPS estables'}</p>` +
+    `<small>Haz una foto a esta pantalla y pásamela.\n${navigator.userAgent}\nGPU: ${gpu} · WebGL2: ${isWebGL2 ? 'sí' : 'no'}</small>` +
+    `<p><button onclick="document.getElementById('results').style.display='none'" style="font-size:20px;padding:10px 20px">Cerrar</button></p>`;
+  document.getElementById('results').style.display = 'flex';
+  document.querySelector('#results button').focus();
+}
+
+// Controles: botones (cursor del mando de Fire TV), teclado y teclas del mando
+document.querySelectorAll('#panel [data-q]').forEach(b => b.addEventListener('click', () => { bench = null; benchSamples = null; applyPreset(b.dataset.q); }));
+document.getElementById('bench').addEventListener('click', startBenchmark);
+addEventListener('keydown', e => {
+  if (e.key === '1') applyPreset('bajo');
+  if (e.key === '2') applyPreset('medio');
+  if (e.key === '3') applyPreset('alto');
+  if (e.key === 'b' || e.key === 'B') startBenchmark();
+});
+
+// ---------------------------------------------------------------------------
+// Bucle principal
+// ---------------------------------------------------------------------------
+let boatZ = -60, last = performance.now(), time = 0;
+const camPos = new THREE.Vector3(), lookAt = new THREE.Vector3(), chimneyPos = new THREE.Vector3(), bufSize = new THREE.Vector2();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const ms = Math.min(250, now - last); last = now;
+  const dt = ms / 1000; time += dt;
+
+  frameTimes.push(ms); if (frameTimes.length > 120) frameTimes.shift();
+  if (ms > 50) hitches++;
+  if (benchSamples) benchSamples.push(ms);
+  if (bench) benchTick(dt);
+
+  // Avanza el barco siguiendo el río
+  boatZ -= SPEED * dt;
+  const bx = riverX(boatZ);
+  const ahead = riverX(boatZ - 4);
+  boat.position.set(bx, Math.sin(time * 1.6) * 0.08, boatZ);
+  boat.rotation.set(Math.sin(time * 1.2) * 0.025, Math.atan2(ahead - bx, 4), Math.sin(time * 0.9) * 0.03);
+
+  // Humo
+  boat.updateMatrixWorld();
+  const chimney = chimneyPos.set(0.7, 3.6, 1.6).applyMatrix4(boat.matrixWorld);
+  for (const s of smoke) {
+    s.userData.t = (s.userData.t + dt * 0.35) % 1;
+    const k = s.userData.t;
+    s.position.set(chimney.x + k * 1.5, chimney.y + k * 3.5, chimney.z + k * 3);
+    s.scale.setScalar(0.6 + k * 2.2);
+  }
+
+  // Tramos visibles: reconstruye solo los que cambian de posición
+  const p = PRESETS[preset];
+  const first = Math.max(0, Math.floor(-boatZ / CHUNK_LEN) - 1);
+  // El tramo j siempre vive en la ranura j % n, así cada ranura se reconstruye una vez al quedar atrás.
+  for (let i = 0; i < MAX_CHUNKS; i++) chunks[i].group.visible = i < p.chunks;
+  for (let j = first; j < first + p.chunks; j++) {
+    const ch = chunks[j % p.chunks];
+    if (ch.index !== j) buildChunk(ch, j);
+  }
+
+  // Agua y sol siguen al barco
+  water.position.set(bx, -0.35, boatZ - 120);
+  waterTime.value = time;
+  sun.position.set(bx + 25, 45, boatZ + 20);
+  sun.target.position.set(bx, 0, boatZ - 10);
+
+  // Cámara de tres cuartos, suave
+  camPos.set(bx + 9, 9, boatZ + 15);
+  camera.position.lerp(camPos, Math.min(1, dt * 2));
+  lookAt.set(bx, 1, boatZ - 8);
+  camera.lookAt(lookAt);
+
+  renderer.render(scene, camera);
+
+  hudTimer += dt;
+  if (hudTimer > 0.5) { hudTimer = 0; updateHud(); }
+}
+
+applyPreset(preset);
+camera.position.set(riverX(boatZ) + 9, 9, boatZ + 15);
+requestAnimationFrame(frame);
+if (params.get('auto') === '1') setTimeout(startBenchmark, 1500);
+</script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#173543">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Casa-barco · Mando</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☸</text></svg>">
+<style>
+  :root { --tinta: #173543; --crema: #fbf3e4; --ambar: #e8a33d; --color: #e8a33d; --madera: #8a5a3b; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--tinta); color: var(--crema); font-family: "Trebuchet MS", system-ui, sans-serif;
+    overflow: hidden; overscroll-behavior: none; user-select: none; -webkit-user-select: none; touch-action: none; }
+  button { font: inherit; color: inherit; border: none; cursor: pointer; }
+  .pantalla { position: fixed; inset: 0; display: none; flex-direction: column; padding: max(16px, env(safe-area-inset-top)) 18px max(16px, env(safe-area-inset-bottom)); }
+  .pantalla.activa { display: flex; }
+
+  /* Entrar */
+  #entrar, #conectando { align-items: center; justify-content: center; text-align: center; gap: 18px; }
+  #entrar h1 { font-size: 30px; margin: 0; }
+  #inputCodigo { width: 220px; font: 700 40px/1 "Trebuchet MS", sans-serif; text-align: center; letter-spacing: .3em; text-transform: uppercase;
+    padding: 12px 0 12px .3em; border-radius: 14px; border: 3px solid var(--ambar); background: var(--crema); color: var(--tinta); touch-action: manipulation; }
+  .boton { background: var(--ambar); color: var(--tinta); font-weight: 700; font-size: 20px; padding: 14px 26px; border-radius: 14px; }
+  .boton.secundario { background: rgba(251,243,228,.12); color: var(--crema); font-weight: 400; font-size: 16px; padding: 10px 18px; }
+  .rueda-carga { width: 54px; height: 54px; border: 5px solid rgba(251,243,228,.2); border-top-color: var(--ambar); border-radius: 50%; animation: girar 1s linear infinite; }
+  @keyframes girar { to { transform: rotate(360deg); } }
+  #mensajeConexion { max-width: 320px; opacity: .85; }
+
+  /* Juego */
+  #juego { gap: 10px; }
+  header { display: flex; align-items: center; gap: 10px; }
+  header .ficha { width: 34px; height: 34px; border-radius: 50%; background: var(--color); box-shadow: 0 0 0 3px rgba(251,243,228,.25); }
+  header .quien { font-weight: 700; font-size: 18px; }
+  header .puesto { margin-left: auto; background: rgba(251,243,228,.12); padding: 6px 12px; border-radius: 20px; font-size: 15px; }
+  #contadorCajas { font-size: 15px; opacity: .85; }
+
+  .zona { flex: 1; display: none; min-height: 0; }
+  .zona.activa { display: flex; }
+
+  /* Timón */
+  #zonaTimon { gap: 14px; align-items: stretch; }
+  #columnaRueda { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-width: 0; }
+  #rueda { width: 100%; max-width: min(52vh, 340px); aspect-ratio: 1; touch-action: none; filter: drop-shadow(0 6px 10px rgba(0,0,0,.35)); }
+  #rueda svg { width: 100%; height: 100%; display: block; }
+  .modos { display: flex; gap: 6px; background: rgba(251,243,228,.08); padding: 4px; border-radius: 12px; }
+  .modos button { background: none; padding: 8px 14px; border-radius: 9px; font-size: 15px; opacity: .7; }
+  .modos button.on { background: var(--crema); color: var(--tinta); opacity: 1; font-weight: 700; }
+  #avisoInclinar { font-size: 13px; opacity: .75; text-align: center; min-height: 1.2em; }
+  #palanca { display: flex; flex-direction: column; gap: 8px; width: 104px; justify-content: center; }
+  #palanca .titulo { text-align: center; font-size: 13px; opacity: .7; }
+  #palanca button { background: rgba(251,243,228,.1); border-radius: 12px; padding: 14px 4px; font-size: 15px; }
+  #palanca button.on { background: var(--ambar); color: var(--tinta); font-weight: 700; }
+
+  /* Pasajero */
+  #zonaPasajero { flex-direction: column; align-items: center; justify-content: center; gap: 22px; text-align: center; }
+  #zonaPasajero p { margin: 0; opacity: .8; max-width: 300px; }
+
+  .bocina { background: var(--color); color: var(--tinta); font-size: 22px; font-weight: 700; padding: 18px 34px; border-radius: 50px; box-shadow: 0 5px 0 rgba(0,0,0,.3); }
+  .bocina:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0,0,0,.3); }
+  .bocina.grande { font-size: 30px; padding: 30px 50px; }
+  #pieTimon { display: flex; justify-content: center; }
+
+  .solo-horizontal { display: none; }
+  @media (orientation: landscape) and (max-height: 500px) {
+    #juego { padding-top: 8px; padding-bottom: 8px; }
+    #rueda { max-width: 62vh; }
+    #palanca button { padding: 8px 4px; }
+    #pieTimon { display: none !important; }
+    #avisoInclinar { display: none; }
+    #palanca .bocina.solo-horizontal { display: block; padding: 12px 4px; font-size: 16px; border-radius: 14px; margin-top: 6px; background: var(--color); color: var(--tinta); font-weight: 700; }
+  }
+  #flash { position: fixed; inset: 0; pointer-events: none; background: #ff7a5c; opacity: 0; transition: opacity .3s; }
+</style>
+</head>
+<body>
+
+<section id="entrar" class="pantalla">
+  <h1>⛵ Casa-barco</h1>
+  <p>Escribe el código que aparece en la tele</p>
+  <input id="inputCodigo" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text">
+  <button id="botonEntrar" class="boton">Subir a bordo</button>
+</section>
+
+<section id="conectando" class="pantalla">
+  <div class="rueda-carga"></div>
+  <p id="mensajeConexion">Subiendo a bordo…</p>
+  <button id="botonOtroCodigo" class="boton secundario" style="display:none">Usar otro código</button>
+</section>
+
+<section id="juego" class="pantalla">
+  <header>
+    <div class="ficha"></div>
+    <div><div class="quien">Jugador ·</div><div id="contadorCajas">📦 0</div></div>
+    <div class="puesto" id="etiquetaPuesto">·</div>
+  </header>
+
+  <div id="zonaTimon" class="zona">
+    <div id="columnaRueda">
+      <div id="rueda">
+        <svg viewBox="-100 -100 200 200" aria-label="Timón">
+          <g id="ruedaGiro">
+            <g stroke="#6b4226" stroke-width="9" stroke-linecap="round">
+              <line x1="0" y1="-92" x2="0" y2="92"/><line x1="-92" y1="0" x2="92" y2="0"/>
+              <line x1="-65" y1="-65" x2="65" y2="65"/><line x1="-65" y1="65" x2="65" y2="-65"/>
+            </g>
+            <circle r="68" fill="none" stroke="#8a5a3b" stroke-width="16"/>
+            <circle r="68" fill="none" stroke="#a8754f" stroke-width="5"/>
+            <circle r="20" fill="#6b4226"/><circle r="9" fill="var(--color)"/>
+            <circle cx="0" cy="-92" r="8" fill="var(--color)"/>
+          </g>
+        </svg>
+      </div>
+      <div class="modos">
+        <button data-modo="arrastrar">👆 Arrastrar</button>
+        <button data-modo="inclinar">📱 Inclinar</button>
+      </div>
+      <div id="avisoInclinar"></div>
+    </div>
+    <div id="palanca">
+      <div class="titulo">Máquina</div>
+      <button data-v="1">A toda</button>
+      <button data-v="0.65">Media</button>
+      <button data-v="0.35">Despacio</button>
+      <button data-v="0">Parado</button>
+      <button class="bocina solo-horizontal" data-bocina>📯 Bocina</button>
+    </div>
+  </div>
+
+  <div id="zonaPasajero" class="zona">
+    <p>Disfruta del paseo 🌿<br>Pronto habrá más puestos: pesca, cocina, huerto…</p>
+    <button class="bocina grande" data-bocina>📯 Bocina</button>
+    <button id="botonPedirTimon" class="boton secundario">☸ Pedir el timón</button>
+  </div>
+
+  <div id="pieTimon"><button class="bocina" data-bocina>📯 Bocina</button></div>
+</section>
+<div id="flash"></div>
+
+<script type="module" src="../js/mando/main.js"></script>
+</body>
+</html>
